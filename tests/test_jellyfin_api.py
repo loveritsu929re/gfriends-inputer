@@ -35,10 +35,13 @@ class JellyfinApiTests(unittest.TestCase):
 
         method, url, kwargs = session.calls[0]
         self.assertEqual(method, "GET")
-        self.assertEqual(url, "http://server/jellyfin/Persons")
+        self.assertEqual(url, "http://server/jellyfin/Items")
         self.assertNotIn("api_key", url)
         self.assertIn('Token="secret"', kwargs["headers"]["Authorization"])
         self.assertEqual(kwargs["params"]["personTypes"], "Actor")
+        self.assertEqual(kwargs["params"]["includeItemTypes"], "Person")
+        self.assertEqual(kwargs["params"]["recursive"], "true")
+        self.assertEqual(kwargs["params"]["enableImages"], "true")
 
     def test_get_persons_follows_pagination(self):
         session = FakeSession([
@@ -51,6 +54,20 @@ class JellyfinApiTests(unittest.TestCase):
 
         self.assertEqual([person["Id"] for person in persons], ["1", "2"])
         self.assertEqual(session.calls[1][2]["params"]["startIndex"], 1)
+
+    def test_get_persons_stops_when_server_repeats_page(self):
+        # Some Jellyfin versions (10.11) ignore startIndex on /Persons-like
+        # endpoints; make sure a repeated page does not cause duplicate work.
+        repeated_page = {"Items": [{"Id": "1"}, {"Id": "2"}], "TotalRecordCount": 100}
+        session = FakeSession([
+            FakeResponse(payload=repeated_page),
+            FakeResponse(payload=repeated_page),
+        ])
+        api = JellyfinApi("http://server", "secret", session=session)
+
+        persons = api.get_persons(page_size=2)
+
+        self.assertEqual([person["Id"] for person in persons], ["1", "2"])
 
     def test_update_item_merges_with_complete_dto(self):
         session = FakeSession([

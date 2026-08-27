@@ -56,32 +56,49 @@ class JellyfinApi:
         return response
 
     def get_persons(self, person_types=("Actor",), page_size=1000, timeout=60):
-        """Return all matching persons, following Jellyfin pagination."""
+        """Return all persons, following Jellyfin pagination via /Items.
+
+        Jellyfin 10.11's dedicated /Persons endpoint ignores ``startIndex``,
+        reports the page size instead of the real total and caps at ~999 items
+        per page, so /Items is used here to enumerate large libraries reliably.
+        """
         persons = []
+        seen_ids = set()
         start_index = 0
 
         while True:
             params = {
                 "startIndex": start_index,
                 "limit": page_size,
+                "recursive": "true",
+                "includeItemTypes": "Person",
                 "enableImages": "true",
             }
             if person_types:
                 params["personTypes"] = ",".join(person_types)
 
             payload = self._request(
-                "GET", "Persons", params=params, timeout=timeout
+                "GET", "Items", params=params, timeout=timeout
             ).json()
             page = payload.get("Items", payload.get("items", []))
+            if not page:
+                break
+
+            # Guard against servers that ignore startIndex and repeat pages.
+            fresh = [person for person in page if person.get("Id") not in seen_ids]
+            if not fresh:
+                break
+            for person in fresh:
+                seen_ids.add(person.get("Id"))
+            persons.extend(fresh)
+
             total = payload.get(
                 "TotalRecordCount",
-                payload.get("totalRecordCount", len(persons) + len(page)),
+                payload.get("totalRecordCount", len(persons) + len(fresh)),
             )
-            persons.extend(page)
-
-            if not page or len(persons) >= total:
+            if len(persons) >= total:
                 break
-            start_index += len(page)
+            start_index += len(fresh)
 
         return persons
 
