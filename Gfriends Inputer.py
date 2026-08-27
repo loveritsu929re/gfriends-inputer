@@ -285,8 +285,9 @@ def download_avatar(url, actor_name, proc_md5):
             try:
                 Image.open(io.BytesIO(gfriends_response.content)).verify()  # 校验下载的图片
             except:
-                logger.warning(pic_path + ' 校验失败，可能下载的头像不完整')
-                print('!! ' + pic_path + ' 校验失败，可能下载的头像不完整')
+                logger.warning(pic_path + ' 校验失败，可能下载的头像不完整，已跳过该头像')
+                print('!! ' + pic_path + ' 校验失败，可能下载的头像不完整，已跳过该头像')
+                continue
             with open(pic_path, "wb") as code:
                 code.write(gfriends_response.content)
             logger.debug(pic_path + ' 下载成功')
@@ -301,8 +302,9 @@ def download_avatar(url, actor_name, proc_md5):
         try:
             Image.open(io.BytesIO(gfriends_response.content)).verify()  # 校验下载的图片
         except:
-            logger.warning(pic_path + ' 校验失败，可能下载的头像不完整')
-            print('!! ' + pic_path + ' 校验失败，可能下载的头像不完整。')
+            logger.warning(pic_path + ' 校验失败，可能下载的头像不完整，已跳过该头像')
+            print('!! ' + pic_path + ' 校验失败，可能下载的头像不完整，已跳过该头像')
+            return False
         with open(pic_path, "wb") as code:
             code.write(gfriends_response.content)
         logger.debug(pic_path + ' 下载成功')
@@ -1017,7 +1019,7 @@ try:
             print('\n>> 尺寸优化...')
             logger.info('开始优化头像尺寸')
             with alive_bar(len(pic_path_dict), enrich_print=False, dual_line=True) as bar:
-                for filename, pic_path in pic_path_dict.items():
+                for filename, pic_path in list(pic_path_dict.items()):
                     bar.text(
                         '正在优化：' + re.sub(r'（.*）', '', filename).replace('.jpg',
                                                                             '')) if '（' in filename else bar.text(
