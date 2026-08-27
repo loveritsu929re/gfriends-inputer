@@ -69,7 +69,7 @@ def fix_size(type, path):
                 sys.exit()
         return True
     except (KeyboardInterrupt, SystemExit):
-        sys.exit()
+        raise
     except:
         if 'pic' in vars(): del pic  # 如果图片已打开，则关闭
         if 'fixed_pic' in vars(): del fixed_pic
@@ -148,7 +148,7 @@ def xslist_scrape(name):
             detial_json["Tags"] = ['AV女优']
         return detial_json
     except (KeyboardInterrupt, SystemExit):
-        sys.exit()
+        raise
     except:
         logger.warning(name + '个人信息刮削失败：' + format_exc())
         return None
@@ -161,7 +161,9 @@ def xslist_read_cache():
         if os.path.exists(xslist_cache_path):
             with open(xslist_cache_path, 'r', encoding='UTF-8') as cache_fp:
                 xslist_cache = loads(cache_fp.read())
-            logger.debug('XSlist 缓存读取成功，共 ' + str(len(xslist_cache)) + ' 条')
+            logger.info(
+                'XSlist 缓存读取成功：' + os.path.abspath(xslist_cache_path) +
+                '，共 ' + str(len(xslist_cache)) + ' 条')
     except:
         logger.warning('XSlist 缓存读取失败：' + format_exc())
         xslist_cache = {}
@@ -192,7 +194,7 @@ def xslist_search(id, name):
         logger.debug(name + '个人信息已上传，返回：' + str(response.status_code))
         return True
     except (KeyboardInterrupt, SystemExit):
-        sys.exit()
+        raise
     except:
         logger.warning(name + '个人信息上传失败：' + format_exc())
         return False
@@ -205,16 +207,26 @@ class OnlyXslistComplete(Exception):
 def run_only_xslist(list_persons, gfriends_map):
     """仅为 Jellyfin 与 Gfriends 重合的演员获取并导入 XSlist 信息。"""
     matched_persons = filter_gfriends_persons(list_persons, gfriends_map)
+    cached_persons = sum(
+        1 for person in matched_persons if person['Name'] in xslist_cache
+    )
+    uncached_persons = len(matched_persons) - cached_persons
     num_xslist_success = num_xslist_fail = 0
     print('\n>> 仅 XSlist 模式：获取并导入演员个人信息...')
     print('   与 Gfriends 名单匹配：' + str(len(matched_persons)) + ' 人')
+    print('   本地缓存命中：' + str(cached_persons) + ' 人')
+    print('   需要访问 XSlist：' + str(uncached_persons) + ' 人')
     logger.info(
         '仅 XSlist 模式，跳过全部头像流程；Jellyfin/Gfriends 匹配人数：' +
-        str(len(matched_persons)) + '/' + str(len(list_persons)))
+        str(len(matched_persons)) + '/' + str(len(list_persons)) +
+        '；缓存命中/待抓取：' + str(cached_persons) + '/' + str(uncached_persons))
     with alive_bar(len(matched_persons), enrich_print=False, dual_line=True) as bar:
         for actor in matched_persons:
             actor_name = actor['Name']
-            bar.text('正在处理：' + actor_name)
+            if actor_name in xslist_cache:
+                bar.text('缓存导入：' + actor_name)
+            else:
+                bar.text('抓取并导入：' + actor_name)
             bar()
             if xslist_search(actor['Id'], actor_name):
                 num_xslist_success += 1
@@ -1156,7 +1168,7 @@ except KeyboardInterrupt:
     logger.info('用户强制停止')
     print('× 用户强制停止')
 except SystemExit:
-    logger.error('已知错误')
+    logger.error('已知错误：' + format_exc())
     print('× 已知错误，请查阅 Getter 目录的 logger.log 日志文件。')
 except:
     logger.error('未知错误：' + format_exc())
