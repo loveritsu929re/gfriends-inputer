@@ -356,6 +356,14 @@ def download_avatar(url, actor_name, proc_md5):
         proc_log.write(proc_md5 + '\n')
 
 
+def avatar_already_downloaded(actor_name, downloaded_files):
+    """判断下载目录中是否已存在该演员的头像文件（含多头像 -N 后缀）。"""
+    if actor_name + '.jpg' in downloaded_files:
+        return True
+    prefix = actor_name + '-'
+    return any(f.startswith(prefix) and f.endswith('.jpg') for f in downloaded_files)
+
+
 @asyncc
 def input_avatar(item_id, data):
     try:
@@ -432,6 +440,7 @@ def read_config(config_file):
             Proxy = config_settings.get("下载设置", "Proxy")
             download_path = config_settings.get("下载设置", "Download_Path")
             Conflict_Proc = config_settings.getint("下载设置", "Conflict_Proc")
+            skip_downloaded = True if config_settings.get("下载设置", "Skip_Downloaded", fallback='否') == '是' else False
             only_download = True if config_settings.get("导入设置", "Only_Download", fallback='否') == '是' else False
             max_upload_connect = config_settings.getint("导入设置", "MAX_UL")
             Get_Intro = config_settings.getint("导入设置", "Get_Intro")
@@ -466,7 +475,7 @@ def read_config(config_file):
             return (
                 repository_url, host_url, api_key, overwrite, fixsize, max_retries, Proxy, aifix, debug,
                 deleteall, download_path, local_path, max_download_connect, max_upload_connect, BD_AI_client, BD_VIP,
-                Get_Intro, Conflict_Proc, only_download)
+                Get_Intro, Conflict_Proc, only_download, skip_downloaded)
         except:
             logger.error('配置文件读取失败：' + format_exc())
             print('× 无法读取 config.ini。如果这是旧版本的配置文件，请删除后重试。\n')
@@ -511,6 +520,12 @@ AI_Fix = 是
 # 0 - 自动优选
 # 1 - 手动挑选（谨慎选择，尤其是有大量头像需要导入时）
 Conflict_Proc = 0
+
+### 跳过已下载的头像 ###
+# 下载目录中已存在该演员的头像文件时，跳过下载，避免重复获取；
+# 配合“只下载不导入”（Only_Download）分两次运行，或中断后重跑时非常有用。
+# 注意：开启后，OverWrite = 2 的“增量更新”将不会覆盖已下载的头像。
+Skip_Downloaded = 否
 
 ### HTTP / Socks 局部代理 ###
 # 推荐开启全局代理而不是使用此局部代理
@@ -786,7 +801,7 @@ else:
 #   sys.stdout = open("./Getter/quiet.log", "w", buffering=1)
 (repository_url, host_url, api_key, overwrite, fixsize, max_retries, Proxy, aifix, debug, deleteall,
  download_path, local_path, max_download_connect, max_upload_connect, BD_AI_client, BD_VIP, Get_Intro,
- Conflict_Proc, only_download) = read_config(config_file)
+ Conflict_Proc, only_download, skip_downloaded) = read_config(config_file)
 del debugflag, config_file
 
 # 根据配置修改日志记录器属性
@@ -841,7 +856,7 @@ if update_flag and not quiet_flag: check_update()
 if deleteall: del_all()
 
 # 变量初始化
-num_suc = num_fail = num_skip = num_exist = 0
+num_suc = num_fail = num_skip = num_exist = num_skip_download = 0
 exist_list = []
 pic_path_dict = {}
 actor_dict = {}
@@ -977,6 +992,8 @@ try:
     else:
         print('\n>> 下载头像...')
         logger.info('开始下载头像')
+        # skip_downloaded：预先收集下载目录内已存在的头像文件名，避免逐个遍历目录
+        downloaded_files = set(f for f in os.listdir(download_path) if f.endswith('.jpg')) if skip_downloaded else set()
         with alive_bar(len(link_dict), enrich_print=False, dual_line=True) as bar:
             for actor_name, link in link_dict.items():
                 try:
@@ -990,7 +1007,13 @@ try:
                     bar()
                     proc_md5 = md5((actor_name + '+1').encode('UTF-8')).hexdigest()[13:-13]
                     if not proc_flag or (proc_flag and not proc_md5 in proc_list):
-                        download_avatar(link, actor_name, proc_md5)  # 记录下载完成的操作放到子线程中，以防没下完中断的断点没记录到
+                        if skip_downloaded and avatar_already_downloaded(actor_name, downloaded_files):
+                            # 下载目录中已存在该演员的头像，跳过下载并记录断点，避免重复获取
+                            num_skip_download += 1
+                            proc_log.write(proc_md5 + '\n')
+                            logger.debug(actor_name + ' 已下载过头像，跳过下载。')
+                        else:
+                            download_avatar(link, actor_name, proc_md5)  # 记录下载完成的操作放到子线程中，以防没下完中断的断点没记录到
                     else:
                         proc_log.write(proc_md5 + '\n')
                     while True:
@@ -1016,6 +1039,9 @@ try:
                 continue
         print('√ 下载完成  ')
         logger.info('头像下载完成')
+        if num_skip_download:
+            print('√ 跳过已下载头像 ' + str(num_skip_download) + ' 枚')
+            logger.info('跳过已下载头像：' + str(num_skip_download))
 
     if Conflict_Proc == 1 and not quiet_flag:
         logger.info('暂停运行，请求用户手动挑选头像')

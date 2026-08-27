@@ -82,6 +82,10 @@ python3 "./Gfriends Inputer.py"
 
 在配置文件中将 `Only_Download` 设为 `是`，程序会下载并优化头像、同时将演员个人信息刮削缓存到本地（`Getter/xslist_cache.json`），但**不会**向服务器导入任何内容。之后把 `Only_Download` 改回 `否` 再次运行，即可完成头像与个人信息的导入；已下载的头像和已刮削的信息不会重复执行。
 
+### 【跳过已下载的头像】
+
+若需要反复运行、或断点记录失效后不想重新下载，可将 `Skip_Downloaded` 设为 `是`：下载目录中已存在的头像文件将被跳过（不会重新获取），已缓存的演员个人信息（`Getter/xslist_cache.json`）也不会重新刮削。注意：开启后，`OverWrite = 2` 的“增量更新”将不再覆盖已下载的头像。
+
 ### 【定时自动运行】
 *Gfriends Inputer v2.6 及后续版本支持*
 
