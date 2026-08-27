@@ -17,7 +17,7 @@ from PIL import Image, ImageFilter
 from aip import AipBodyAnalysis
 from urllib.parse import quote, urljoin
 from jellyfin_api import JellyfinApi
-from xslist_scraper import XslistSession, parse_xslist_details
+from xslist_scraper import XslistSession, filter_gfriends_persons, parse_xslist_details
 
 
 def fix_size(type, path):
@@ -202,13 +202,17 @@ class OnlyXslistComplete(Exception):
     """仅 XSlist 模式正常完成，用于结束后续头像流程。"""
 
 
-def run_only_xslist(list_persons):
-    """为 Jellyfin 全部演员获取并导入 XSlist 个人信息。"""
+def run_only_xslist(list_persons, gfriends_map):
+    """仅为 Jellyfin 与 Gfriends 重合的演员获取并导入 XSlist 信息。"""
+    matched_persons = filter_gfriends_persons(list_persons, gfriends_map)
     num_xslist_success = num_xslist_fail = 0
     print('\n>> 仅 XSlist 模式：获取并导入演员个人信息...')
-    logger.info('仅 XSlist 模式，跳过全部头像流程')
-    with alive_bar(len(list_persons), enrich_print=False, dual_line=True) as bar:
-        for actor in list_persons:
+    print('   与 Gfriends 名单匹配：' + str(len(matched_persons)) + ' 人')
+    logger.info(
+        '仅 XSlist 模式，跳过全部头像流程；Jellyfin/Gfriends 匹配人数：' +
+        str(len(matched_persons)) + '/' + str(len(list_persons)))
+    with alive_bar(len(matched_persons), enrich_print=False, dual_line=True) as bar:
+        for actor in matched_persons:
             actor_name = actor['Name']
             bar.text('正在处理：' + actor_name)
             bar()
@@ -223,7 +227,7 @@ def run_only_xslist(list_persons):
     print('   未找到或导入失败：' + str(num_xslist_fail) + ' 人\n')
     logger.info(
         '仅 XSlist 模式完成，成功/失败/总数：' + str(num_xslist_success) + '/' +
-        str(num_xslist_fail) + '/' + str(len(list_persons)))
+        str(num_xslist_fail) + '/' + str(len(matched_persons)))
 
 
 def get_gfriends_map(repository_url):
@@ -562,8 +566,8 @@ Proxy =
 Only_Download = 否
 
 ### 仅处理 XSlist 演员信息 ###
-# 开启后忽略所有头像下载、处理和导入设置，只获取并导入演员个人信息。
-# 本选项会遍历媒体服务器中的全部演员；Only_Download 和 Get_Intro 的值将被忽略。
+# 开启后只读取 Gfriends 名单用于筛选，不下载、处理或导入头像。
+# 仅为媒体服务器中与 Gfriends 名单重合的演员获取并导入个人信息；Only_Download 和 Get_Intro 将被忽略。
 Only_Xslist = 否
 
 ### 搜索女友个人信息 ###
@@ -830,7 +834,8 @@ else:
 try:
     list_persons = read_persons(host_url, api_key)
     if only_xslist:
-        run_only_xslist(list_persons)
+        gfriends_map = get_gfriends_map(repository_url)
+        run_only_xslist(list_persons, gfriends_map)
         raise OnlyXslistComplete
     # list_persons = [{'Name': '@YOU', 'ServerId': 'be208b8f79ed449aacf99a1a23530488', 'Id': '59932', 'Type': 'Person', 'ImageTags': {'Primary': '3ad658cbfb0173e14bb09d255e84d64a'}, 'BackdropImageTags': []}]
     gfriends_map = get_gfriends_map(repository_url)

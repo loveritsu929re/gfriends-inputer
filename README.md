@@ -93,7 +93,7 @@ scrapling install
 
 ### 【仅处理演员信息】
 
-在配置文件中将 `Only_Xslist` 设为 `是` 后，程序只会遍历媒体服务器中的演员，通过 XSlist 获取个人信息并导入 Jellyfin。该模式不会连接头像仓库，也不会下载、扫描、优化或上传任何头像；`Only_Download`、`Get_Intro` 以及其他头像相关设置会被忽略。
+在配置文件中将 `Only_Xslist` 设为 `是` 后，程序会读取 Gfriends 名单，并只对媒体服务器中与该名单重合的演员通过 XSlist 获取个人信息并导入 Jellyfin。该模式不会下载、扫描、优化或上传任何头像；`Only_Download`、`Get_Intro` 以及其他头像相关设置会被忽略。
 
 ### 【跳过已下载的头像】
 

@@ -1,6 +1,6 @@
 import unittest
 
-from xslist_scraper import XslistSession, parse_xslist_details
+from xslist_scraper import XslistSession, filter_gfriends_persons, parse_xslist_details
 
 
 class FakeResponse:
@@ -30,6 +30,22 @@ class FakeStealthySession:
 
 
 class XslistSessionTests(unittest.TestCase):
+    def test_filters_persons_to_gfriends_overlap(self):
+        persons = [
+            {'Id': '1', 'Name': '演员甲'},
+            {'Id': '2', 'Name': '演员乙（旧艺名）'},
+            {'Id': '3', 'Name': '演员丙(alias)'},
+            {'Id': '4', 'Name': '导演丁'},
+        ]
+
+        matched = filter_gfriends_persons(persons, {'演员甲', '演员乙', '演员丙'})
+
+        self.assertEqual(matched, [
+            {'Id': '1', 'Name': '演员甲'},
+            {'Id': '2', 'Name': '演员乙'},
+            {'Id': '3', 'Name': '演员丙'},
+        ])
+
     def test_parses_current_xslist_detail_structure(self):
         html = """
         <html><body><main><section><p>

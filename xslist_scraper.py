@@ -2,9 +2,25 @@
 """XSlist 的 Scrapling 浏览器会话管理。"""
 
 import atexit
+import re
 import threading
 
 from lxml import etree
+
+
+def filter_gfriends_persons(list_persons, gfriends_names):
+    """筛选 Jellyfin 与 Gfriends 重合的人员，并使用 Gfriends 标准名。"""
+    matched_persons = []
+    gfriends_names = set(gfriends_names)
+    for person in list_persons:
+        original_name = person['Name']
+        matched_name = original_name
+        if matched_name not in gfriends_names:
+            matched_name = re.sub(r'（.*）', '', matched_name)
+            matched_name = re.sub(r'\(.*\)', '', matched_name)
+        if matched_name in gfriends_names:
+            matched_persons.append({'Id': person['Id'], 'Name': matched_name})
+    return matched_persons
 
 
 def parse_xslist_details(html_text):
