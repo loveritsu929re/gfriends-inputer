@@ -1,5 +1,7 @@
 import unittest
 
+import requests
+
 from jellyfin_api import JellyfinApi
 
 
@@ -13,7 +15,9 @@ class FakeResponse:
 
     def raise_for_status(self):
         if self.status_code >= 400:
-            raise AssertionError("unexpected HTTP error")
+            raise requests.exceptions.HTTPError(
+                "HTTP {}".format(self.status_code), response=self
+            )
 
 
 class FakeSession:
@@ -86,6 +90,80 @@ class JellyfinApiTests(unittest.TestCase):
             "SortName": "Keep",
             "Overview": "Bio",
         })
+
+    def test_update_item_retries_lookup_with_discovered_user_id(self):
+        session = FakeSession([
+            FakeResponse(status_code=400),
+            FakeResponse(payload=[{"Id": "user-1"}]),
+            FakeResponse(payload={"Id": "abc", "Name": "Old"}),
+            FakeResponse(status_code=204),
+            FakeResponse(payload={"Id": "def", "Name": "Other"}),
+            FakeResponse(status_code=204),
+        ])
+        api = JellyfinApi("http://server", "secret", session=session)
+
+        api.update_item("abc", {"Overview": "Bio"})
+        api.update_item("def", {"Tags": ["Actor"]})
+
+        self.assertEqual(
+            [(call[0], call[1]) for call in session.calls],
+            [
+                ("GET", "http://server/Items/abc"),
+                ("GET", "http://server/Users"),
+                ("GET", "http://server/Items/abc"),
+                ("POST", "http://server/Items/abc"),
+                ("GET", "http://server/Items/def"),
+                ("POST", "http://server/Items/def"),
+            ],
+        )
+        self.assertEqual(session.calls[2][2]["params"], {"userId": "user-1"})
+        self.assertEqual(session.calls[4][2]["params"], {"userId": "user-1"})
+        self.assertEqual(session.calls[3][2]["json"], {
+            "Id": "abc",
+            "Name": "Old",
+            "Overview": "Bio",
+        })
+
+    def test_update_item_falls_back_when_item_lookup_returns_400(self):
+        session = FakeSession([
+            FakeResponse(status_code=400),
+            FakeResponse(payload=[{"Id": "user-1"}]),
+            FakeResponse(status_code=400),
+            FakeResponse(status_code=204),
+            FakeResponse(status_code=204),
+        ])
+        api = JellyfinApi("http://server", "secret", session=session)
+
+        api.update_item("abc", {"Name": "New", "Overview": "Bio"})
+        api.update_item("def", {"Name": "Other", "Tags": ["Actor"]})
+
+        self.assertEqual(
+            [(call[0], call[1]) for call in session.calls],
+            [
+                ("GET", "http://server/Items/abc"),
+                ("GET", "http://server/Users"),
+                ("GET", "http://server/Items/abc"),
+                ("POST", "http://server/Items/abc"),
+                ("POST", "http://server/Items/def"),
+            ],
+        )
+        self.assertEqual(session.calls[3][2]["json"], {
+            "Name": "New",
+            "Overview": "Bio",
+        })
+        self.assertEqual(session.calls[4][2]["json"], {
+            "Name": "Other",
+            "Tags": ["Actor"],
+        })
+
+    def test_update_item_does_not_fallback_for_other_lookup_errors(self):
+        session = FakeSession([FakeResponse(status_code=404)])
+        api = JellyfinApi("http://server", "secret", session=session)
+
+        with self.assertRaises(requests.exceptions.HTTPError):
+            api.update_item("missing", {"Overview": "Bio"})
+
+        self.assertEqual(len(session.calls), 1)
 
     def test_set_item_image_base64_encodes_image_body(self):
         session = FakeSession([FakeResponse(status_code=204)])
