@@ -410,13 +410,11 @@ def argparse_function(ver: str) -> [str, str, bool]:
     parser.add_argument("-c", "--config", default='config.ini', nargs='?', help="The config file Path.")
     parser.add_argument("-q", "--quiet", dest='quietflag', action="store_true",
                         help="Assume Yes on all queries and Print logs to file.")
-    parser.add_argument("--skip-update", dest='updateflag', action="store_false",
-                        help="Skip update check and try to exec old version.")
     parser.add_argument("--debug", dest='debugflag', action="store_true",
                         help="Debug log, same as debug option in config.")
     parser.add_argument("-v", "--version", action="version", version=ver)
     args = parser.parse_args()
-    return args.config, args.quietflag, args.updateflag, args.debugflag
+    return args.config, args.quietflag, args.debugflag
 
 
 def read_config(config_file):
@@ -681,102 +679,6 @@ def get_ip():
         pass
 
 
-def check_update():
-    rewriteable_word('>> 检查更新...')
-    try:
-        get_ip()
-        response = session.get('https://api.github.com/repos/gfriends/gfriends-inputer/releases', timeout=5)
-        response.encoding = 'utf-8'
-        """
-        if response.status_code != 200:
-            print('× 检查更新失败！返回了一个错误：' + str(response.status_code))
-            logger.warning('检查更新失败！返回了一个错误：' + str(response.status_code))
-            rewriteable_word('按任意键跳过...')
-            os.system('pause>nul') if WINOS else input('Press Enter to skip...')
-        """
-        # version process
-        # `v2.94` > `2.94`
-        # `v3.0.0` > `3.0.0` > `0.0.3` > `00.3` > `3.00`
-        local_ver = version.replace('v', '')
-        remote_ver = loads(response.text)[0]['tag_name'].replace('v', '')
-        if remote_ver.count('.') > 1:
-            remote_ver = remote_ver[::-1].replace('.', '', 1)[::-1]
-        if local_ver.count('.') > 1:
-            local_ver = local_ver[::-1].replace('.', '', 1)[::-1]
-
-        if (float(local_ver) < float(remote_ver)) and not quiet_flag:
-            logger.info('检测到新版本：' + str(local_ver) + ' -> ' + str(remote_ver))
-            print(loads(response.text)[0]['name'] + ' 发布啦！\n')
-            print(loads(response.text)[0]['body'])
-            print('了解详情：https://git.io/JL0tk\n')
-
-            # 获取新版本下载链接
-            download_link = ""
-            for item in loads(response.text)[0]['assets']:
-                if sys.platform.startswith('win') and (
-                        'windows' in item['browser_download_url'] or 'Windows' in item['browser_download_url']):
-                    download_link = item['browser_download_url']
-                    break
-                if sys.platform.startswith('darwin') and (
-                        'macos' in item['browser_download_url'] or 'macOS' in item['browser_download_url']):
-                    download_link = item['browser_download_url']
-                    break
-                if sys.platform.startswith('linux') and (
-                        'ubuntu' in item['browser_download_url'] or 'Linux' in item['browser_download_url']):
-                    download_link = item['browser_download_url']
-                    break
-
-            # 下载新版本
-            if download_link:
-                response = requests.get(download_link, stream=True)  # 必须用流式传输
-                got_size = 0  # 初始化已下载大小
-                chunk_size = 1024  # 每次下载的数据大小
-                content_size = int(response.headers['content-length'])  # 下载文件总大小
-                try:
-                    if response.status_code == 200:  # 判断是否响应成功
-                        response.iter_content(chunk_size=chunk_size)
-                        with alive_bar(content_size, enrich_print=False, dual_line=True, monitor='{percent:.0%}',
-                                       elapsed=False,
-                                       stats=False, spinner=None, receipt=True) as bar:
-                            with open("./update.zip", 'wb') as file:  # 显示进度条
-                                for data in response.iter_content(chunk_size=chunk_size):
-                                    file.write(data)
-                                    got_size += len(data)
-                                    bar(len(data))
-                                    bar.text(
-                                        '下载中：%.2fMB/%.2fMB' % (
-                                            float(got_size / 1024 / 1024), float(content_size / 1024 / 1024)))
-
-                        print("update.zip 已下载成功，请解压后使用新版本。")
-                        logger.info("更新包下载成功")
-                    else:
-                        print("下载失败，请上述通过详情链接下载。服务器返回：", response.status_code)
-                        logger.warning("更新包下载失败，服务器返回：", response.status_code)
-                except:
-                    print("更新包下载失败，请手动下载：", download_link)
-                    logger.warning("更新包下载失败：", format_exc())
-
-            print("")
-            rewriteable_word('按任意键退出...')
-            os.system('pause>nul') if WINOS else input('Press Enter to exit...')
-            os._exit(0)
-        else:
-            logger.info('未检测到新版本')
-    except requests.exceptions:
-        logger.warning('网络问题导致更新检查失败，跳过更新' + format_exc())
-        print('× 检查更新失败，网络连接不稳定！\n')
-        print('即将跳过更新。')
-        time.sleep(3)
-    except:
-        logger.warning('更新检查失败，跳过更新：' + format_exc())
-        print('× 检查更新失败！\n')
-        print('即将跳过更新。')
-        time.sleep(3)
-    if WINOS and not quiet_flag:
-        # 清屏
-        os.system('cls')
-
-
 # 日志记录器
 if not os.path.exists('./Getter/'): os.makedirs('./Getter/')
 if os.path.exists('./Getter/logger.log'): os.remove('./Getter/logger.log')
@@ -796,7 +698,7 @@ else:
         os.chdir(config_path)  # 切换工作目录
     logger.debug('修正运行目录：' + config_path + ':' + work_path)
 
-(config_file, quiet_flag, update_flag, debugflag) = argparse_function(version)
+(config_file, quiet_flag, debugflag) = argparse_function(version)
 # if quiet_flag:
 #   sys.stdout = open("./Getter/quiet.log", "w", buffering=1)
 (repository_url, host_url, api_key, overwrite, fixsize, max_retries, Proxy, aifix, debug, deleteall,
@@ -850,9 +752,9 @@ jellyfin_api = JellyfinApi(
     version=version.replace('v', '')
 )
 
-# 检查更新
+# 获取 IP 归属地（用于代理提示）
 public_ip = None
-if update_flag and not quiet_flag: check_update()
+if not quiet_flag: get_ip()
 if deleteall: del_all()
 
 # 变量初始化
