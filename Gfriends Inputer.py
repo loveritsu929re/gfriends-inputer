@@ -11,11 +11,11 @@ from configparser import RawConfigParser
 from traceback import format_exc
 from functools import reduce
 from hashlib import md5
-from base64 import b64encode
 from json import loads
 from lxml import etree
 from PIL import Image, ImageFilter
 from aip import AipBodyAnalysis
+from jellyfin_api import JellyfinApi
 
 
 def fix_size(type, path):
@@ -140,7 +140,7 @@ def xslist_search(id, name):
                 detail_info += item[0] + ': ' + item[1] + '<br>'
 
         # 重组请求json
-        detial_json = {"name": name, "Taglines": ['AV女优'], "Genres": [],
+        detial_json = {"Name": name, "Taglines": ['AV女优'], "Genres": [],
                        "ProviderIds": {"Gfriends": "https://git.io/gfriends"},
                        "Overview": detail_info}
         if ProductionLocations:
@@ -152,9 +152,8 @@ def xslist_search(id, name):
         else:
             detial_json["Tags"] = ['AV女优']
 
-        url_post = host_url + 'Items/' + id + '?api_key=' + api_key
-        response = session.post(url_post, json=detial_json, proxies=host_proxies)
-        logger.debug(name + '个人信息已上传，返回：' + response.text)
+        response = jellyfin_api.update_item(id, detial_json)
+        logger.debug(name + '个人信息已上传，返回：' + str(response.status_code))
         return True
     except (KeyboardInterrupt, SystemExit):
         sys.exit()
@@ -314,61 +313,34 @@ def download_avatar(url, actor_name, proc_md5):
 
 
 @asyncc
-def input_avatar(url, data):
+def input_avatar(item_id, data):
     try:
-        session.post(url, proxies=host_proxies, data=data, headers={"Content-Type": 'image/jpeg'})
-        logger.debug(url.replace(host_url, '').replace(api_key, '***') + ' 导入成功。')
+        jellyfin_api.set_item_image(item_id, data)
+        logger.debug('Items/' + item_id + '/Images/Primary 导入成功。')
     except:
-        logger.warning(url.replace(host_url, '').replace(api_key, '***') + ' 导入失败。' + format_exc())
-        print('!! ' + url.replace(host_url, '').replace(api_key,
-                                                        '***') + ' 导入失败，可能是与媒体服务器连接不稳定，请尝试降低导入线程数。')
+        logger.warning('Items/' + item_id + '/Images/Primary 导入失败。' + format_exc())
+        print('!! Items/' + item_id + '/Images/Primary 导入失败，可能是与媒体服务器连接不稳定，请尝试降低导入线程数。')
 
 
 @asyncc
 def del_avatar(id, name):
-    url_post_img = host_url + 'Items/' + id + '/Images/Primary?api_key=' + api_key
-    session.delete(url=url_post_img, proxies=host_proxies)
-    url_post_img = host_url + 'Items/' + id + '/Images/Backdrop?api_key=' + api_key
-    session.delete(url=url_post_img, proxies=host_proxies)
-    url_post_img = host_url + 'Items/' + id + '/Images/Thumb?api_key=' + api_key
-    session.delete(url=url_post_img, proxies=host_proxies)
+    for image_type in ('Primary', 'Backdrop', 'Thumb'):
+        jellyfin_api.delete_item_image(id, image_type)
     # 重组请求json
     detial_json = {
         "Name": name,
         "ForcedSortName": name,
         "SortName": name,
-        "ChannelNumber": "",
-        "OriginalTitle": "",
-        "CommunityRating": "",
-        "CriticRating": "",
-        "IndexNumber": "0",
-        "ParentIndexNumber": "0",
-        "SortParentIndexNumber": "",
-        "SortIndexNumber": "",
-        "DisplayOrder": "",
-        "Album": "",
-        "AlbumArtists": [],
-        "ArtistItems": [],
+        "OriginalTitle": None,
         "Overview": "",
-        "Status": "",
+        "Status": None,
         "Genres": [],
         "Tags": [],
-        "TagItems": [],
-        "Studios": [],
-        "DateCreated": "",
-        "EndDate": "",
-        "ProductionYear": "",
-        "Video3DFormat": "",
-        "OfficialRating": "",
-        "CustomRating": "",
         "ProviderIds": {},
-        "PreferredMetadataLanguage": "",
-        "PreferredMetadataCountryCode": "",
         "ProductionLocations": [],
         "Taglines": []
     }
-    url_post = host_url + 'Items/' + id + '?api_key=' + api_key
-    session.post(url_post, json=detial_json, proxies=host_proxies)
+    jellyfin_api.update_item(id, detial_json)
 
 
 def get_gfriends_link(name):
@@ -565,12 +537,22 @@ Version = '''
 
 def read_persons(host_url, api_key):
     rewriteable_word('>> 连接 Emby / Jellyfin 服务器...')
-    host_url_persons = host_url + 'Persons?api_key=' + api_key  # &PersonTypes=Actor
+    host_url_persons = host_url + 'Persons'
     try:
-        rqs_emby = session.get(url=host_url_persons, proxies=host_proxies, timeout=60, verify=False)
+        output = sorted(jellyfin_api.get_persons(), key=lambda x: x['Name'])  # 按姓名排序
     except requests.exceptions.ConnectionError:
         logger.error('连接 Emby / Jellyfin 服务器失败：' + host_url_persons + format_exc())
         print('× 连接 Emby / Jellyfin 服务器失败，请检查地址是否正确：', host_url_persons, '\n')
+        sys.exit()
+    except requests.exceptions.HTTPError as error:
+        status_code = error.response.status_code if error.response is not None else '未知'
+        logger.error('Emby / Jellyfin 返回：' + str(status_code) + format_exc())
+        if status_code == 401:
+            print('× 无权访问 Emby / Jellyfin 服务器，请检查 API 密匙是否正确\n')
+        elif status_code == 404:
+            print('× 尝试读取 Emby / Jellyfin 演员列表但是未找到，可能是未适配的版本：', host_url_persons, '\n')
+        else:
+            print('× 连接 Emby / Jellyfin 服务器成功，但是服务器返回错误：' + str(status_code))
         sys.exit()
     except requests.exceptions.RequestException:
         logger.error('连接 Emby / Jellyfin 服务器超时：' + host_url_persons + format_exc())
@@ -580,31 +562,10 @@ def read_persons(host_url, api_key):
         logger.error('连接 Emby / Jellyfin 服务器未知错误：' + host_url_persons + format_exc())
         print('× 连接 Emby / Jellyfin 服务器未知错误：', host_url_persons, '\n')
         sys.exit()
-    if rqs_emby.status_code == 401:
-        logger.error('Emby / Jellyfin 返回：401 API 未授权')
-        print('× 无权访问 Emby / Jellyfin 服务器，请检查 API 密匙是否正确\n')
-        sys.exit()
-    elif rqs_emby.status_code == 404:
-        logger.error('Emby / Jellyfin 返回 404 API 未找到，且备选 API 亦无效')
-        print('× 尝试读取 Emby / Jellyfin 演员列表但是未找到，可能是未适配的版本：', host_url_persons, '\n')
-        sys.exit()
-    elif rqs_emby.status_code != 200:
-        logger.error('Emby / Jellyfin 返回：' + str(rqs_emby.status_code))
-        print('× 连接 Emby / Jellyfin 服务器成功，但是服务器内部错误：' + str(rqs_emby.status_code))
-        sys.exit()
-    # if 'json' not in rqs_emby.headers['Content-Type']: # 群辉返回的类型是 text/html？
-    # print('× 连接 Emby / Jellyfin 服务器成功，但是服务器的演员列表不能识别：' + rqs_emby.headers['Content-Type'])
-    # sys.exit()
-    try:
-        output = sorted(loads(rqs_emby.text)['Items'], key=lambda x: x['Name'])  # 按姓名排序
-        logger.info('连接 Emby / Jellyfin 服务器成功，包含演员：' + str(len(output)))
-        print('√ 连接 Emby / Jellyfin 服务器成功')
-        print('   演职人员：' + str(len(output)) + '人\n')
-        return output
-    except:
-        logger.error('Emby / Jellyfin 的响应无法解析为 Json：' + rqs_emby.headers['Content-Type'])
-        print('× 连接 Emby / Jellyfin 服务器成功，但是服务器的演员列表不能识别：' + rqs_emby.headers['Content-Type'])
-        sys.exit()
+    logger.info('连接 Emby / Jellyfin 服务器成功，包含演员：' + str(len(output)))
+    print('√ 连接 Emby / Jellyfin 服务器成功')
+    print('   演员：' + str(len(output)) + '人\n')
+    return output
 
 
 def write_txt(filename, content):
@@ -817,6 +778,13 @@ session.mount('https://',
               requests.adapters.HTTPAdapter(max_retries=max_retries, pool_connections=100, pool_maxsize=100))
 session.headers = {"User-Agent": 'Gfriends_Inputer/' + version.replace('v', '')}
 session.proxies = proxies
+jellyfin_api = JellyfinApi(
+    host_url,
+    api_key,
+    session=session,
+    proxies=host_proxies,
+    version=version.replace('v', '')
+)
 
 # 检查更新
 public_ip = None
@@ -1079,9 +1047,8 @@ try:
                 proc_md5 = md5((filename + '+3').encode('UTF-8')).hexdigest()[13:-13]
                 if not proc_flag or (proc_flag and not proc_md5 in proc_list):
                     with open(pic_path, 'rb') as pic_bit:
-                        b6_pic = b64encode(pic_bit.read())
-                    url_post_img = host_url + 'Items/' + actor_dict[actorname] + '/Images/Primary?api_key=' + api_key
-                    input_avatar(url_post_img, b6_pic)
+                        pic_data = pic_bit.read()
+                    input_avatar(actor_dict[actorname], pic_data)
                     if Get_Intro == 1:
                         bar.text(
                             '搜索信息：' + re.sub(r'（.*）', '', filename).replace('.jpg',
