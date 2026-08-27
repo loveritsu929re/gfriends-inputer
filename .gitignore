@@ -1,0 +1,46 @@
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+.eggs/
+build/
+dist/
+wheels/
+
+# ===== 虚拟环境 =====
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# ===== IDE / 编辑器 =====
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# ===== 测试与覆盖率 =====
+.pytest_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+
+# ===== 本项目运行时生成物（含敏感信息） =====
+# 配置文件包含 API 密钥等敏感信息，切勿提交
+config.ini
+
+# 日志与调试输出
+Getter/
+*.log
+
+# 下载的头像图片与第三方头像包
+Avatar/
+Downloads/
