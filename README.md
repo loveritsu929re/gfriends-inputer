@@ -42,7 +42,7 @@ CLI 命令: "Gfriends Inputer" [-h] [-c [CONFIG]] [-q] [-v]
   -v, --version         显示当前版本。
 ```
 
-您亦可在 Python 3.6 及以上版本环境下直接运行源码
+您亦可在 Python 3.10 及以上版本环境下直接运行源码
 ```
 git clone https://github.com/gfriends/gfriends-inputer.git
 cd ./gfriends-inputer
@@ -78,9 +78,22 @@ python3 "./Gfriends Inputer.py"
 
 仅需在配置文件中开启。程序会在下载头像后，顺便搜索女友的个人信息（生日、三围、身高等），然后一并导入服务器。
 
+XSlist 使用 Scrapling 浏览器通过 Cloudflare 验证。首次使用前，安装 Python 依赖后还需安装一次浏览器组件：
+
+```powershell
+python -m pip install -r requirements.txt
+scrapling install
+```
+
+程序运行期间会复用同一个浏览器会话，退出时自动关闭；配置的代理也会传给该会话。
+
 ### 【只下载不导入】
 
 在配置文件中将 `Only_Download` 设为 `是`，程序会下载并优化头像、同时将演员个人信息刮削缓存到本地（`Getter/xslist_cache.json`），但**不会**向服务器导入任何内容。之后把 `Only_Download` 改回 `否` 再次运行，即可完成头像与个人信息的导入；已下载的头像和已刮削的信息不会重复执行。
+
+### 【仅处理演员信息】
+
+在配置文件中将 `Only_Xslist` 设为 `是` 后，程序只会遍历媒体服务器中的演员，通过 XSlist 获取个人信息并导入 Jellyfin。该模式不会连接头像仓库，也不会下载、扫描、优化或上传任何头像；`Only_Download`、`Get_Intro` 以及其他头像相关设置会被忽略。
 
 ### 【跳过已下载的头像】
 

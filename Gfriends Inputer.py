@@ -15,7 +15,9 @@ from json import loads, dumps
 from lxml import etree
 from PIL import Image, ImageFilter
 from aip import AipBodyAnalysis
+from urllib.parse import quote, urljoin
 from jellyfin_api import JellyfinApi
+from xslist_scraper import XslistSession, parse_xslist_details
 
 
 def fix_size(type, path):
@@ -96,30 +98,22 @@ def xslist_scrape(name):
     """从 XSlist 刮削演员个人信息，返回重组后的请求载荷；未找到或解析失败返回 None。"""
     try:
         # 搜索
-        url = "https://xslist.org/search?lg=zh&query=" + name
-        response = session.get(url, timeout=10)
-        html = etree.HTML(response.text)
+        url = "https://xslist.org/search?lg=zh&query=" + quote(name)
+        response_url, response_text = xslist_session.fetch(url)
+        html = etree.HTML(response_text)
         try:
-            detial_url = html.xpath('/html/body/ul/li/h3/a/@href')[0]
+            detial_url = urljoin(response_url, html.xpath('/html/body/ul/li/h3/a/@href')[0])
             logger.debug(name + '搜索到个人信息：' + detial_url)
         except:
             logger.debug(name + '未找到个人信息')
             return None
 
         # 获取详情页
-        response = session.get(detial_url, timeout=10)
-        html = etree.HTML(response.text)
+        _, response_text = xslist_session.fetch(detial_url)
         try:
-            detail_list = html.xpath('/html/body/div[1]/div[3]/div/p[1]/descendant-or-self::text()')
-            detail_dict = {}
-            for index, info in enumerate(detail_list):
-                info = info.replace(' ', '', 2)  # 删掉多余空格
-                if '身高' in info or '国籍' in info:
-                    if detail_list[index + 1].split(':')[0] != 'n/a':
-                        detail_dict[info.split(':')[0]] = detail_list[index + 1].split(':')[0]
-                else:
-                    if len(info.split(':')) > 1 and info.split(':')[1] != 'n/a':
-                        detail_dict[info.split(':')[0]] = info.split(':')[1]
+            detail_dict = parse_xslist_details(response_text)
+            if not detail_dict:
+                raise ValueError('详情页未找到资料字段')
             logger.debug(name + '已获取个人信息：' + str(detail_dict))
         except:
             logger.warning(name + '个人信息解析失败，页面：' + detial_url)
@@ -202,6 +196,34 @@ def xslist_search(id, name):
     except:
         logger.warning(name + '个人信息上传失败：' + format_exc())
         return False
+
+
+class OnlyXslistComplete(Exception):
+    """仅 XSlist 模式正常完成，用于结束后续头像流程。"""
+
+
+def run_only_xslist(list_persons):
+    """为 Jellyfin 全部演员获取并导入 XSlist 个人信息。"""
+    num_xslist_success = num_xslist_fail = 0
+    print('\n>> 仅 XSlist 模式：获取并导入演员个人信息...')
+    logger.info('仅 XSlist 模式，跳过全部头像流程')
+    with alive_bar(len(list_persons), enrich_print=False, dual_line=True) as bar:
+        for actor in list_persons:
+            actor_name = actor['Name']
+            bar.text('正在处理：' + actor_name)
+            bar()
+            if xslist_search(actor['Id'], actor_name):
+                num_xslist_success += 1
+            else:
+                num_xslist_fail += 1
+
+    xslist_save_cache()
+    print('√ 演员个人信息处理完成')
+    print('   成功导入：' + str(num_xslist_success) + ' 人')
+    print('   未找到或导入失败：' + str(num_xslist_fail) + ' 人\n')
+    logger.info(
+        '仅 XSlist 模式完成，成功/失败/总数：' + str(num_xslist_success) + '/' +
+        str(num_xslist_fail) + '/' + str(len(list_persons)))
 
 
 def get_gfriends_map(repository_url):
@@ -440,6 +462,7 @@ def read_config(config_file):
             Conflict_Proc = config_settings.getint("下载设置", "Conflict_Proc")
             skip_downloaded = True if config_settings.get("下载设置", "Skip_Downloaded", fallback='否') == '是' else False
             only_download = True if config_settings.get("导入设置", "Only_Download", fallback='否') == '是' else False
+            only_xslist = True if config_settings.get("导入设置", "Only_Xslist", fallback='否') == '是' else False
             max_upload_connect = config_settings.getint("导入设置", "MAX_UL")
             Get_Intro = config_settings.getint("导入设置", "Get_Intro")
             local_path = config_settings.get("导入设置", "Local_Path")
@@ -458,14 +481,15 @@ def read_config(config_file):
             # 创建文件夹
             if not os.path.exists('./Getter/'):
                 os.makedirs('./Getter/')
-            if not os.path.exists(download_path):
-                os.makedirs(download_path)
-            if not os.path.exists(local_path):
-                os.makedirs(local_path)
-                write_txt(local_path + "/README.txt",
-                          '本目录自动生成，您可以存放自己收集的头像（仅支持JPG格式），这些头像将被优先导入服务器。\n\n请自行备份您收集头像的副本，根据个人配置不同，该目录文件可能会被程序修改。')
+            if not only_xslist:
+                if not os.path.exists(download_path):
+                    os.makedirs(download_path)
+                if not os.path.exists(local_path):
+                    os.makedirs(local_path)
+                    write_txt(local_path + "/README.txt",
+                              '本目录自动生成，您可以存放自己收集的头像（仅支持JPG格式），这些头像将被优先导入服务器。\n\n请自行备份您收集头像的副本，根据个人配置不同，该目录文件可能会被程序修改。')
             # 定义百度AI
-            if fixsize == 3:
+            if fixsize == 3 and not only_xslist:
                 BD_AI_client = AipBodyAnalysis(BD_App_ID, BD_API_Key, BD_Secret_Key)
             else:
                 BD_AI_client = None
@@ -473,7 +497,7 @@ def read_config(config_file):
             return (
                 repository_url, host_url, api_key, overwrite, fixsize, max_retries, Proxy, aifix, debug,
                 deleteall, download_path, local_path, max_download_connect, max_upload_connect, BD_AI_client, BD_VIP,
-                Get_Intro, Conflict_Proc, only_download, skip_downloaded)
+                Get_Intro, Conflict_Proc, only_download, only_xslist, skip_downloaded)
         except:
             logger.error('配置文件读取失败：' + format_exc())
             print('× 无法读取 config.ini。如果这是旧版本的配置文件，请删除后重试。\n')
@@ -536,6 +560,11 @@ Proxy =
 # 下载并优化头像、刮削个人信息到本地缓存（Getter/xslist_cache.json），但不向服务器导入任何内容。
 # 之后将本选项改为“否”再次运行，即可完成导入；已下载的头像和已刮削的信息不会重复执行。
 Only_Download = 否
+
+### 仅处理 XSlist 演员信息 ###
+# 开启后忽略所有头像下载、处理和导入设置，只获取并导入演员个人信息。
+# 本选项会遍历媒体服务器中的全部演员；Only_Download 和 Get_Intro 的值将被忽略。
+Only_Xslist = 否
 
 ### 搜索女友个人信息 ###
 # 刮削演员信息并导入，使用演员日文原名效果最佳。
@@ -703,7 +732,7 @@ else:
 #   sys.stdout = open("./Getter/quiet.log", "w", buffering=1)
 (repository_url, host_url, api_key, overwrite, fixsize, max_retries, Proxy, aifix, debug, deleteall,
  download_path, local_path, max_download_connect, max_upload_connect, BD_AI_client, BD_VIP, Get_Intro,
- Conflict_Proc, only_download, skip_downloaded) = read_config(config_file)
+ Conflict_Proc, only_download, only_xslist, skip_downloaded) = read_config(config_file)
 del debugflag, config_file
 
 # 根据配置修改日志记录器属性
@@ -716,7 +745,7 @@ else:
     logger.setLevel(logging.INFO)
 
 # 初始化日志后再尝试引入CV2
-if fixsize == 3:
+if fixsize == 3 and not only_xslist:
     from Lib.cv2dnn import find_faces
 
 # 局部代理
@@ -737,6 +766,9 @@ if Proxy:
 else:
     proxies = host_proxies = None
 
+# XSlist 全程复用同一个 Scrapling 浏览器上下文，以保留 Cloudflare 验证状态。
+xslist_session = XslistSession(proxy=Proxy or None)
+
 # 持久会话
 session = requests.Session()
 session.mount('http://', requests.adapters.HTTPAdapter(max_retries=max_retries, pool_connections=100, pool_maxsize=100))
@@ -755,7 +787,7 @@ jellyfin_api = JellyfinApi(
 # 获取 IP 归属地（用于代理提示）
 public_ip = None
 if not quiet_flag: get_ip()
-if deleteall: del_all()
+if deleteall and not only_xslist: del_all()
 
 # 变量初始化
 num_suc = num_fail = num_skip = num_exist = num_skip_download = 0
@@ -767,7 +799,7 @@ inputed_dict = {}
 proc_flag = False
 xslist_cache_path = './Getter/xslist_cache.json'
 xslist_cache = {}
-if Get_Intro:
+if Get_Intro or only_xslist:
     xslist_read_cache()
 
 print('Gfriends Inputer ' + version)
@@ -797,6 +829,9 @@ else:
 
 try:
     list_persons = read_persons(host_url, api_key)
+    if only_xslist:
+        run_only_xslist(list_persons)
+        raise OnlyXslistComplete
     # list_persons = [{'Name': '@YOU', 'ServerId': 'be208b8f79ed449aacf99a1a23530488', 'Id': '59932', 'Type': 'Person', 'ImageTags': {'Primary': '3ad658cbfb0173e14bb09d255e84d64a'}, 'BackdropImageTags': []}]
     gfriends_map = get_gfriends_map(repository_url)
     actor_log = open('./Getter/演员清单.txt', 'w', encoding="UTF-8", buffering=1)
@@ -1110,6 +1145,8 @@ try:
         else:
             print('\n√ 没有需要导入的头像')
             logger.info('没有需要导入的头像')
+except OnlyXslistComplete:
+    pass
 except KeyboardInterrupt:
     logger.info('用户强制停止')
     print('× 用户强制停止')
