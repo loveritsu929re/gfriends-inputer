@@ -11,7 +11,7 @@ from configparser import RawConfigParser
 from traceback import format_exc
 from functools import reduce
 from hashlib import md5
-from json import loads
+from json import loads, dumps
 from lxml import etree
 from PIL import Image, ImageFilter
 from aip import AipBodyAnalysis
@@ -92,7 +92,8 @@ def asyncc(f):
 
 
 # @asyncc
-def xslist_search(id, name):
+def xslist_scrape(name):
+    """从 XSlist 刮削演员个人信息，返回重组后的请求载荷；未找到或解析失败返回 None。"""
     try:
         # 搜索
         url = "https://xslist.org/search?lg=zh&query=" + name
@@ -103,7 +104,7 @@ def xslist_search(id, name):
             logger.debug(name + '搜索到个人信息：' + detial_url)
         except:
             logger.debug(name + '未找到个人信息')
-            return False
+            return None
 
         # 获取详情页
         response = session.get(detial_url, timeout=10)
@@ -122,7 +123,7 @@ def xslist_search(id, name):
             logger.debug(name + '已获取个人信息：' + str(detail_dict))
         except:
             logger.warning(name + '个人信息解析失败，页面：' + detial_url)
-            return False
+            return None
 
         # 处理输出简介
         detail_info = ''
@@ -151,14 +152,55 @@ def xslist_search(id, name):
             detial_json["Tags"] = ['AV女优', cups]
         else:
             detial_json["Tags"] = ['AV女优']
+        return detial_json
+    except (KeyboardInterrupt, SystemExit):
+        sys.exit()
+    except:
+        logger.warning(name + '个人信息刮削失败：' + format_exc())
+        return None
 
+
+def xslist_read_cache():
+    """读取 XSlist 个人信息本地缓存（Getter/xslist_cache.json）。"""
+    global xslist_cache
+    try:
+        if os.path.exists(xslist_cache_path):
+            with open(xslist_cache_path, 'r', encoding='UTF-8') as cache_fp:
+                xslist_cache = loads(cache_fp.read())
+            logger.debug('XSlist 缓存读取成功，共 ' + str(len(xslist_cache)) + ' 条')
+    except:
+        logger.warning('XSlist 缓存读取失败：' + format_exc())
+        xslist_cache = {}
+
+
+def xslist_save_cache():
+    """将 XSlist 个人信息本地缓存写回磁盘，供导入阶段直接使用。"""
+    global xslist_cache
+    try:
+        with open(xslist_cache_path, 'w', encoding='UTF-8') as cache_fp:
+            cache_fp.write(dumps(xslist_cache, ensure_ascii=False, indent=2))
+    except:
+        logger.warning('XSlist 缓存写入失败：' + format_exc())
+
+
+def xslist_search(id, name):
+    """导入演员个人信息：优先使用本地缓存，未命中时重新刮削并缓存。"""
+    global xslist_cache
+    detial_json = xslist_cache.get(name)
+    if detial_json is None:
+        detial_json = xslist_scrape(name)
+        if detial_json is None:
+            return False
+        xslist_cache[name] = detial_json
+        xslist_save_cache()
+    try:
         response = jellyfin_api.update_item(id, detial_json)
         logger.debug(name + '个人信息已上传，返回：' + str(response.status_code))
         return True
     except (KeyboardInterrupt, SystemExit):
         sys.exit()
     except:
-        logger.warning(name + '个人信息刮削失败：' + format_exc())
+        logger.warning(name + '个人信息上传失败：' + format_exc())
         return False
 
 
@@ -390,6 +432,7 @@ def read_config(config_file):
             Proxy = config_settings.get("下载设置", "Proxy")
             download_path = config_settings.get("下载设置", "Download_Path")
             Conflict_Proc = config_settings.getint("下载设置", "Conflict_Proc")
+            only_download = True if config_settings.get("导入设置", "Only_Download", fallback='否') == '是' else False
             max_upload_connect = config_settings.getint("导入设置", "MAX_UL")
             Get_Intro = config_settings.getint("导入设置", "Get_Intro")
             local_path = config_settings.get("导入设置", "Local_Path")
@@ -423,7 +466,7 @@ def read_config(config_file):
             return (
                 repository_url, host_url, api_key, overwrite, fixsize, max_retries, Proxy, aifix, debug,
                 deleteall, download_path, local_path, max_download_connect, max_upload_connect, BD_AI_client, BD_VIP,
-                Get_Intro, Conflict_Proc)
+                Get_Intro, Conflict_Proc, only_download)
         except:
             logger.error('配置文件读取失败：' + format_exc())
             print('× 无法读取 config.ini。如果这是旧版本的配置文件，请删除后重试。\n')
@@ -476,9 +519,14 @@ Conflict_Proc = 0
 Proxy = 
 
 [导入设置]
+### 只下载不导入 ###
+# 下载并优化头像、刮削个人信息到本地缓存（Getter/xslist_cache.json），但不向服务器导入任何内容。
+# 之后将本选项改为“否”再次运行，即可完成导入；已下载的头像和已刮削的信息不会重复执行。
+Only_Download = 否
+
 ### 搜索女友个人信息 ###
 # 刮削演员信息并导入，使用演员日文原名效果最佳。
-# 为降低来源网站负载，暂时只能单线程，因此会拖慢导入速度。
+# 刮削为单线程以降低来源网站负载；信息会先缓存到本地，导入时直接上传，不重复刮削。
 # 0 - 不搜索个人信息
 # 1 - 从 XSlist 获取个人信息
 Get_Intro = 0
@@ -496,7 +544,6 @@ OverWrite = 2
 ### 导入线程数 ###
 # 导入至本地或内网服务器时，网络稳定可适当增大导入线程数（推荐：20-100）
 # 导入至远程服务器时，可适当减小导入线程数（推荐：5-20）
-# 开启 “搜索女友个人信息” 时此选项无效
 MAX_UL = 20
 
 ### 头像尺寸优化 ###
@@ -739,7 +786,7 @@ else:
 #   sys.stdout = open("./Getter/quiet.log", "w", buffering=1)
 (repository_url, host_url, api_key, overwrite, fixsize, max_retries, Proxy, aifix, debug, deleteall,
  download_path, local_path, max_download_connect, max_upload_connect, BD_AI_client, BD_VIP, Get_Intro,
- Conflict_Proc) = read_config(config_file)
+ Conflict_Proc, only_download) = read_config(config_file)
 del debugflag, config_file
 
 # 根据配置修改日志记录器属性
@@ -801,8 +848,10 @@ actor_dict = {}
 link_dict = {}
 inputed_dict = {}
 proc_flag = False
+xslist_cache_path = './Getter/xslist_cache.json'
+xslist_cache = {}
 if Get_Intro:
-    max_upload_connect /= 5
+    xslist_read_cache()
 
 print('Gfriends Inputer ' + version)
 print('https://git.io/gfriends\n')
@@ -840,7 +889,10 @@ try:
     logger.info('引擎初始化')
     rewriteable_word('>> 引擎初始化...')
     md5_persons = md5(str(list_persons).encode('UTF-8')).hexdigest()[14:-14]
-    md5_config = md5(open('config.ini', 'rb').read()).hexdigest()[14:-14]  # md5计算只支持字节流
+    # md5计算只支持字节流；忽略 Only_Download 开关，保证“仅下载”与“导入”两次运行的断点记录可续传
+    with open('config.ini', 'rb') as config_fp:
+        config_bytes = re.sub(rb'(?m)^\s*Only_Download\s*=.*$', b'Only_Download = ', config_fp.read())
+    md5_config = md5(config_bytes).hexdigest()[14:-14]
     if os.path.exists('./Getter/proc.tmp'):  # 有中断记录，则逐行读取记录
         with open('./Getter/proc.tmp', 'r', encoding='UTF-8') as file:
             proc_list = file.read().split('\n')
@@ -1036,61 +1088,100 @@ try:
         else:
             logger.info('未开启头像尺寸优化')
 
-        print('\n>> 导入头像...')
-        logger.info('导入头像')
-        with alive_bar(len(pic_path_dict), enrich_print=False, dual_line=True) as bar:
-            for filename, pic_path in pic_path_dict.items():
-                actorname = filename.replace('.jpg', '')
-                actorname = re.sub(r'1-\d+', '', actorname)
-                bar.text(
-                    '正在导入：' + re.sub(r'（.*）', '', filename).replace('.jpg', '')) if '（' in filename else bar.text(
-                    '正在导入：' + actorname)
-                bar()
-                proc_md5 = md5((filename + '+3').encode('UTF-8')).hexdigest()[13:-13]
-                if not proc_flag or (proc_flag and not proc_md5 in proc_list):
-                    with open(pic_path, 'rb') as pic_bit:
-                        pic_data = pic_bit.read()
-                    input_avatar(actor_dict[actorname], pic_data)
-                    if Get_Intro == 1:
-                        bar.text(
-                            '搜索信息：' + re.sub(r'（.*）', '', filename).replace('.jpg',
-                                                                                '')) if '（' in filename else bar.text(
-                            '搜索信息：' + actorname)
-                        xslist_search(actor_dict[actorname], actorname)
-                proc_log.write(proc_md5 + '\n')
-                while True:
-                    if threading.activeCount() > max_upload_connect + 1:
-                        time.sleep(0.01)
-                    else:
-                        break
-                num_suc += 1
-        rewriteable_word('>> 即将完成')
-        for thr_status in threading.enumerate():  # 等待子线程运行结束
-            try:
-                thr_status.join()
-            except RuntimeError:
-                continue
-        print('√ 导入完成  ')
-        print(
-            '\nEmby / Jellyfin 演职人员共 ' + str(len(list_persons)) + ' 人，其中 ' + str(num_exist) + ' 人之前已有头像')
-        print('本次导入/更新头像 ' + str(num_suc) + ' 枚，还有 ' + str(num_fail) + ' 人没有头像\n')
-        logger.info(
-            '导入头像完成，成功/失败/存在/总数：' + str(num_suc) + '/' + str(num_fail) + '/' + str(num_exist) + '/' + str(
-                len(list_persons)))
-        if not overwrite:
-            print('-- 未开启覆盖已有头像，所以跳过了一些演员，详见 Getter 目录下的记录清单')
+        if Get_Intro:
+            print('\n>> 搜索演员个人信息...')
+            logger.info('搜索演员个人信息')
+            with alive_bar(len(pic_path_dict), enrich_print=False, dual_line=True) as bar:
+                for filename, pic_path in pic_path_dict.items():
+                    actorname = filename.replace('.jpg', '')
+                    actorname = re.sub(r'1-\d+', '', actorname)
+                    bar.text('正在搜索：' + actorname)
+                    bar()
+                    proc_md5 = md5((filename + '+4').encode('UTF-8')).hexdigest()[13:-13]
+                    if actorname not in xslist_cache:  # 缓存命中则跳过；未命中（含上次失败/中断）则刮削
+                        detial_json = xslist_scrape(actorname)
+                        if detial_json:
+                            xslist_cache[actorname] = detial_json
+                            xslist_save_cache()
+                    if actorname in xslist_cache:  # 仅成功刮削的演员记录断点，失败的后续运行会自动重试
+                        proc_log.write(proc_md5 + '\n')
+            xslist_save_cache()  # 确保缓存文件存在（即使本次未刮削到任何信息）
+            if xslist_cache:
+                print('√ 个人信息搜索完成，成功缓存 ' + str(len(xslist_cache)) + ' 条')
+                logger.info('个人信息搜索完成，成功缓存 ' + str(len(xslist_cache)) + ' 条')
+            else:
+                print('!! 个人信息搜索完成，但未能获取任何信息')
+                print('!! 请检查代理/网络能否访问 xslist.org，修复后重新运行会自动重试')
+                logger.warning('个人信息搜索完成，但未能获取任何信息，请检查代理或网络')
+
+        if only_download:
+            print('\n>> 仅下载模式：跳过导入...')
+            logger.info('仅下载模式，跳过导入')
+            print('√ 已下载并优化头像 ' + str(len(pic_path_dict)) + ' 枚')
+            if Get_Intro:
+                print('√ 个人信息已缓存 ' + str(len(xslist_cache)) + ' 条至 Getter/xslist_cache.json')
+            print('√ 将 Only_Download 改为“否”再次运行，即可完成头像与个人信息导入')
+        else:
+            print('\n>> 导入头像...')
+            logger.info('导入头像')
+            with alive_bar(len(pic_path_dict), enrich_print=False, dual_line=True) as bar:
+                for filename, pic_path in pic_path_dict.items():
+                    actorname = filename.replace('.jpg', '')
+                    actorname = re.sub(r'1-\d+', '', actorname)
+                    bar.text(
+                        '正在导入：' + re.sub(r'（.*）', '', filename).replace('.jpg', '')) if '（' in filename else bar.text(
+                        '正在导入：' + actorname)
+                    bar()
+                    proc_md5 = md5((filename + '+3').encode('UTF-8')).hexdigest()[13:-13]
+                    if not proc_flag or (proc_flag and not proc_md5 in proc_list):
+                        with open(pic_path, 'rb') as pic_bit:
+                            pic_data = pic_bit.read()
+                        input_avatar(actor_dict[actorname], pic_data)
+                        if Get_Intro == 1:
+                            bar.text(
+                                '搜索信息：' + re.sub(r'（.*）', '', filename).replace('.jpg',
+                                                                                    '')) if '（' in filename else bar.text(
+                                '搜索信息：' + actorname)
+                            xslist_search(actor_dict[actorname], actorname)
+                    proc_log.write(proc_md5 + '\n')
+                    while True:
+                        if threading.activeCount() > max_upload_connect + 1:
+                            time.sleep(0.01)
+                        else:
+                            break
+                    num_suc += 1
+            rewriteable_word('>> 即将完成')
+            for thr_status in threading.enumerate():  # 等待子线程运行结束
+                try:
+                    thr_status.join()
+                except RuntimeError:
+                    continue
+            print('√ 导入完成  ')
+            print(
+                '\nEmby / Jellyfin 演职人员共 ' + str(len(list_persons)) + ' 人，其中 ' + str(num_exist) + ' 人之前已有头像')
+            print('本次导入/更新头像 ' + str(num_suc) + ' 枚，还有 ' + str(num_fail) + ' 人没有头像\n')
+            logger.info(
+                '导入头像完成，成功/失败/存在/总数：' + str(num_suc) + '/' + str(num_fail) + '/' + str(num_exist) + '/' + str(
+                    len(list_persons)))
+            if not overwrite:
+                print('-- 未开启覆盖已有头像，所以跳过了一些演员，详见 Getter 目录下的记录清单')
     proc_log.close()
-    os.remove('./Getter/proc.tmp')
-    if overwrite == 2 and not Conflict_Proc:
-        down_log = open('./Getter/down' + md5_host_url + '.log', 'w', encoding="UTF-8")
-        down_log.write(
-            '## Gfriends Inputer 导入记录 ##\n## 请注意：删除本文件会导致服务器 ' + host_url + ' 的增量更新功能重置\n' + md5_config + '\n')
-        for key, value in inputed_dict.items():
-            down_log.write(key + '|' + value + '\n')
-        down_log.close()
+    if only_download:
+        logger.info('仅下载模式完成，保留断点记录')
+        print('\n√ 仅下载模式完成，断点已保留')
+        print('√ 下次运行（Only_Download = 否）将跳过已完成的下载与刮削，直接导入')
     else:
-        print('\n√ 没有需要导入的头像')
-        logger.info('没有需要导入的头像')
+        os.remove('./Getter/proc.tmp')
+        if overwrite == 2 and not Conflict_Proc:
+            down_log = open('./Getter/down' + md5_host_url + '.log', 'w', encoding="UTF-8")
+            down_log.write(
+                '## Gfriends Inputer 导入记录 ##\n## 请注意：删除本文件会导致服务器 ' + host_url + ' 的增量更新功能重置\n' + md5_config + '\n')
+            for key, value in inputed_dict.items():
+                down_log.write(key + '|' + value + '\n')
+            down_log.close()
+        else:
+            print('\n√ 没有需要导入的头像')
+            logger.info('没有需要导入的头像')
 except KeyboardInterrupt:
     logger.info('用户强制停止')
     print('× 用户强制停止')
