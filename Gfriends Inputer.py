@@ -180,10 +180,15 @@ def xslist_save_cache():
 
 
 def xslist_search(id, name):
-    """导入演员个人信息：优先使用本地缓存，未命中时重新刮削并缓存。"""
+    """导入演员个人信息：优先使用本地缓存，未命中时重新刮削并缓存。
+    Skip_Downloaded = 是 时仅使用本地缓存，未命中直接失败，不访问 XSlist。"""
     global xslist_cache
     detial_json = xslist_cache.get(name)
     if detial_json is None:
+        if skip_downloaded:
+            # Skip_Downloaded = 是：仅使用本地缓存，不从网络抓取缺失的信息
+            logger.debug(name + ' 未命中XSlist缓存且 Skip_Downloaded 开启，跳过刮削。')
+            return False
         detial_json = xslist_scrape(name)
         if detial_json is None:
             return False
@@ -215,16 +220,23 @@ def run_only_xslist(list_persons, gfriends_map):
     print('\n>> 仅 XSlist 模式：获取并导入演员个人信息...')
     print('   与 Gfriends 名单匹配：' + str(len(matched_persons)) + ' 人')
     print('   本地缓存命中：' + str(cached_persons) + ' 人')
-    print('   需要访问 XSlist：' + str(uncached_persons) + ' 人')
+    if skip_downloaded:
+        # Skip_Downloaded = 是：不访问 XSlist，仅导入本地缓存中已有的信息
+        print('   需要访问 XSlist：0 人（Skip_Downloaded = 是，仅使用本地缓存）')
+    else:
+        print('   需要访问 XSlist：' + str(uncached_persons) + ' 人')
     logger.info(
         '仅 XSlist 模式，跳过全部头像流程；Jellyfin/Gfriends 匹配人数：' +
         str(len(matched_persons)) + '/' + str(len(list_persons)) +
-        '；缓存命中/待抓取：' + str(cached_persons) + '/' + str(uncached_persons))
+        '；缓存命中/待抓取：' + str(cached_persons) + '/' + str(uncached_persons) +
+        ('；Skip_Downloaded = 是，仅使用本地缓存' if skip_downloaded else ''))
     with alive_bar(len(matched_persons), enrich_print=False, dual_line=True) as bar:
         for actor in matched_persons:
             actor_name = actor['Name']
             if actor_name in xslist_cache:
                 bar.text('缓存导入：' + actor_name)
+            elif skip_downloaded:
+                bar.text('缓存缺失（跳过）：' + actor_name)
             else:
                 bar.text('抓取并导入：' + actor_name)
             bar()
@@ -563,6 +575,8 @@ Conflict_Proc = 0
 # 下载目录中已存在该演员的头像文件时，跳过下载，避免重复获取；
 # 配合“只下载不导入”（Only_Download）分两次运行，或中断后重跑时非常有用。
 # 注意：开启后，OverWrite = 2 的“增量更新”将不会覆盖已下载的头像。
+# 开启后同样作用于 XSlist 个人信息（Get_Intro / Only_Xslist）：只使用本地缓存
+# （Getter/xslist_cache.json）中已有的信息，不会从网络抓取缺失或新的信息。
 Skip_Downloaded = 否
 
 ### HTTP / Socks 局部代理 ###
@@ -1069,8 +1083,8 @@ try:
             logger.info('未开启头像尺寸优化')
 
         if Get_Intro:
-            print('\n>> 搜索演员个人信息...')
-            logger.info('搜索演员个人信息')
+            print('\n>> 搜索演员个人信息...' + ('（Skip_Downloaded = 是，仅使用本地缓存）' if skip_downloaded else ''))
+            logger.info('搜索演员个人信息' + ('（Skip_Downloaded = 是，仅使用本地缓存）' if skip_downloaded else ''))
             with alive_bar(len(pic_path_dict), enrich_print=False, dual_line=True) as bar:
                 for filename, pic_path in pic_path_dict.items():
                     actorname = filename.replace('.jpg', '')
@@ -1079,16 +1093,23 @@ try:
                     bar()
                     proc_md5 = md5((filename + '+4').encode('UTF-8')).hexdigest()[13:-13]
                     if actorname not in xslist_cache:  # 缓存命中则跳过；未命中（含上次失败/中断）则刮削
-                        detial_json = xslist_scrape(actorname)
-                        if detial_json:
-                            xslist_cache[actorname] = detial_json
-                            xslist_save_cache()
+                        if skip_downloaded:
+                            # Skip_Downloaded = 是：仅使用本地缓存，不从网络抓取缺失的信息
+                            logger.debug(actorname + ' 未命中XSlist缓存且 Skip_Downloaded 开启，跳过刮削。')
+                        else:
+                            detial_json = xslist_scrape(actorname)
+                            if detial_json:
+                                xslist_cache[actorname] = detial_json
+                                xslist_save_cache()
                     if actorname in xslist_cache:  # 仅成功刮削的演员记录断点，失败的后续运行会自动重试
                         proc_log.write(proc_md5 + '\n')
             xslist_save_cache()  # 确保缓存文件存在（即使本次未刮削到任何信息）
             if xslist_cache:
                 print('√ 个人信息搜索完成，成功缓存 ' + str(len(xslist_cache)) + ' 条')
                 logger.info('个人信息搜索完成，成功缓存 ' + str(len(xslist_cache)) + ' 条')
+            elif skip_downloaded:
+                print('!! 个人信息搜索完成，但本地缓存为空（Skip_Downloaded = 是，未访问 XSlist）')
+                logger.warning('个人信息搜索完成，但本地缓存为空且 Skip_Downloaded 开启，未访问 XSlist')
             else:
                 print('!! 个人信息搜索完成，但未能获取任何信息')
                 print('!! 请检查代理/网络能否访问 xslist.org，修复后重新运行会自动重试')
